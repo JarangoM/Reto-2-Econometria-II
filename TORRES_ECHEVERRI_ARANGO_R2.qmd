@@ -14,7 +14,7 @@ library(vcdExtra); library(generalhoslem); library(ResourceSelection); library(e
 
 ```{r}
 #| include: false
-data <- read_excel("C:/Users/Jorge/Desktop/DatosR2.xlsx")
+data <- read_excel("DatosR2.xlsx")
 data <- data[!apply(data == -99 | data == -98, 1, any), ]
 
 ```
@@ -286,3 +286,4 @@ auc <- lroc(probit, auc.coords=c(.1,.1))
 auc["auc"]
 
 ```
+

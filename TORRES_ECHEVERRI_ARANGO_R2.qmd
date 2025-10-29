@@ -1,0 +1,288 @@
+---
+title: "Reto 2"
+format: html
+editor: visual
+---
+
+```{r}
+#| include: false
+library(tidyverse); library(haven); library(knitr); library(margins); library(pscl)
+library(vcdExtra); library(generalhoslem); library(ResourceSelection); library(epiDisplay); library(readxl); library(summarytools); library(marginaleffects); library(dbplyr); library(survey)
+```
+
+# Datos
+
+```{r}
+#| include: false
+data <- read_excel("C:/Users/Jorge/Desktop/DatosR2.xlsx")
+data <- data[!apply(data == -99 | data == -98, 1, any), ]
+
+```
+
+### Agrupación de los datos
+
+```{r}
+data$satis<- ifelse(data$satis <= 5, 0, 1)
+data$sexo <- ifelse(data$sexo <= 1, 0, 1) #0 hombre 1 mujer 
+data$est_civil <- ifelse(data$est_civil %in% c(1, 3, 4), 0, 1)
+data$educ <- ifelse(data$educ %in% c(0, 1, 2,3,4,5,6,11), 0, 1)
+data$recre <- ifelse(data$recre <= 5, 0, 1)
+data$relac <- ifelse(data$relac <= 5, 0, 1)
+data$dial <- ifelse(data$dial <= 1, 1, 0)
+data$persalud<- ifelse(data$persalud <= 2, 1, 0)
+```
+
+### Estadísticas descriptivas
+
+```{r}
+#| echo: false
+# Definición del diseño de encuesta
+diseno_encuesta <- svydesign(
+  ids = ~1,
+  weights = ~FEP, # La columna del factor de expansión en 'data'
+  data = data
+)
+
+# Tabla de medias con FEP
+medias_numericas <- svymean(
+  x = ~educ + satis + sexo + persalud + est_civil + relac + dial + recre + edad, 
+  design = diseno_encuesta, 
+  na.rm = TRUE
+)
+
+# data frame de la tabla con medias y desviacion estandar
+# 1. Extraemos las estimaciones (coeficientes) y los errores estándar (SE)
+estimaciones <- coef(medias_numericas)
+errores_estandar <- SE(medias_numericas)
+
+# 2. Creamos el data.frame combinando la información
+tabla_medias <- data.frame(
+  Variable = names(estimaciones),
+  Estimacion_Ponderada = as.numeric(estimaciones),
+  Error_Estandar = as.numeric(errores_estandar)
+)
+# 3. la tabla resultante
+print(tabla_medias)
+
+
+library(vcd) # Paquete para gráfico cruzado (zonas verdes -->> satisfacción)
+
+# Calcular la tabla de contingencia ponderada
+tabla_contingencia_ponderada <- svytable(~recre + satis , diseno_encuesta)
+
+# Crear el gráfico de mosaico
+mosaic(
+  tabla_contingencia_ponderada,
+  main = "Gráfico de Mosaico Ponderado ( satisfaccion vs. zonas verdes)",
+  gp = shading_hcl, # Estilo de color
+  direction = c("v", "h") # Dirección de división
+)
+
+```
+
+# Modelo probit
+
+```{r}
+#| echo: false
+#Modelo probit 
+probit <- glm(satis ~ factor(sexo)+factor(est_civil)+factor(educ)+factor(recre)+factor(relac)+factor(dial)+factor(persalud)+edad, data=data, family=binomial(link="probit")) 
+summary(probit)
+data$y_est_p <- predict(probit, type = "response")
+summary(data$y_est_p)
+```
+
+### Efecto parcial promedio
+
+```{r}
+#| echo: false
+# Efecto parcial promedio (Average marginal effects)
+summary(margins(probit))
+
+```
+
+### Identificación del individuo promedio
+
+```{r}
+#| echo: false
+prop_ones <- sapply(data[, c("sexo", "est_civil", "educ",  
+                             "relac", "dial", "persalud")],
+                    function(x) mean(as.numeric(as.character(x)), na.rm = TRUE))
+prop_ones
+modes <- sapply(data[, c("sexo", "est_civil", "educ",
+                         "relac", "dial", "persalud")],
+                function(x) as.character(names(which.max(table(x)))))
+modes
+
+```
+
+### Efecto parcial en el promedio
+
+```{r}
+#| echo: false
+#Efecto parcial en el promedio
+MEM<-slopes(
+  probit,
+  newdata = datagrid(
+    model = probit,               
+    sexo      = "1",
+    est_civil = "0",
+    educ      = "0",
+    relac     = "1",
+    dial      = "1",
+    persalud  = "0", # numéricas en su media
+    edad= mean(data$edad),
+    recre = c("0","1")
+  ),
+)
+DT::datatable(MEM, options = list(pageLength = 50, scrollX = TRUE))
+
+slopes(probit, newdata = "mean")
+```
+
+### Cálculo de probabilidades por separado
+
+```{r}
+#| echo: false
+#En las medias de las variables (debe dar igual que efecto parcial en el promedio)
+prob_medias_recre <- predict(probit,
+                        newdata = data.frame(
+                          sexo = "1",
+                          est_civil = "0",
+                          educ = "0",
+                          relac = "1",
+                          dial = "1",
+                          persalud = "0",
+                          edad = mean(data$edad),
+                          recre = c("0", "1")
+                        ),
+                        type = "response")
+
+prob_medias_recre
+# Diferencia de probabilidad (efecto marginal discreto)
+diff(prob_medias_recre)
+```
+
+```{r}
+#| echo: false
+#Promedio de las probabilidades (debe da igual a efecto parcial promedio)
+
+# Probabilidad promedio si todos tuvieran recre = 1
+prob_promedio_recre1 <- predict(
+  probit,
+  newdata = data.frame(
+    sexo      = data$sexo,
+    est_civil = data$est_civil,
+    educ      = data$educ,
+    relac     = data$relac,
+    dial      = data$dial,
+    persalud  = data$persalud,
+    edad      = data$edad,
+    recre     = 1
+  ),
+  type = "response"
+)
+
+# Probabilidad promedio si todos tuvieran recre = 0
+prob_promedio_recre0 <- predict(
+  probit,
+  newdata = data.frame(
+    sexo      = data$sexo,
+    est_civil = data$est_civil,
+    educ      = data$educ,
+    relac     = data$relac,
+    dial      = data$dial,
+    persalud  = data$persalud,
+    edad      = data$edad,
+    recre     = 0
+  ),
+  type = "response"
+)
+
+# Medias 
+summary(prob_promedio_recre1)["Mean"]
+summary(prob_promedio_recre0)["Mean"]
+
+#Resta 
+summary(prob_promedio_recre1)["Mean"] - summary(prob_promedio_recre0)["Mean"]
+```
+
+# Gráfica de efecto
+
+```{r}
+#| echo: false
+newdata <- data.frame(
+  sexo      = "1",
+  est_civil = "0",
+  educ      = "0",
+  relac     = "1",
+  dial      = "1",
+  persalud  = "0",
+  edad      = mean(data$edad, na.rm = TRUE),
+  recre     = c("0", "1")   # sólo cambia recre
+)
+
+
+pred <- predict(probit, newdata = newdata, type = "link", se.fit = TRUE)
+
+z <- qnorm(0.975)
+
+newdata$prob <- pnorm(pred$fit)
+newdata$lo   <- pnorm(pred$fit - z * pred$se.fit)
+newdata$hi   <- pnorm(pred$fit + z * pred$se.fit)
+
+
+library(ggridges)
+
+ggplot(data, aes(x = y_est_p, y = factor(recre), fill = factor(recre))) +
+  geom_density_ridges(alpha = 0.8) +
+  scale_fill_manual(values = c("gray70", "steelblue")) +
+  labs(
+    x = "Probabilidad estimada para estar satisfecho con tu vida",
+    y = "Satisfacción con zonas verdes y recreativas de calidad ",
+    title = "Distribución de la probabilidad por nivel"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "none")
+```
+
+# Medidas de bondad de ajuste
+
+### Pseudo R2
+
+```{r}
+#| echo: false
+probit_r <- glm(satis ~ 1, data=data,
+              family=binomial(link="probit")) 
+
+pR2 <- 1- logLik(probit)/logLik(probit_r)
+pR2
+```
+
+### Proporción de predicciones correctas
+
+```{r}
+#| echo: false
+kable(data %>% group_by(satis) %>%
+        dplyr::summarise (n = n()) %>%
+  mutate(percent = n / sum(n)))
+
+hitmiss(probit, k=0.94)
+```
+
+### Hosmer-Lemeshow goodness-of-fit test
+
+```{r}
+#| echo: false
+HLtest(probit)
+summary(HLtest(probit))
+plot(HLtest(probit))
+```
+
+### Curva ROC
+
+```{r}
+#| echo: false
+auc <- lroc(probit, auc.coords=c(.1,.1))
+auc["auc"]
+
+```
